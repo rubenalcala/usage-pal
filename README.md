@@ -131,7 +131,7 @@ The token starts with `sk-ant-oat01-`. Paste it into the web form — it is save
 
 | Constant | Default | Description |
 |---|---|---|
-| `SYNC_INTERVAL_SECS` | `300` | How often to call the API (seconds)  |
+| `SYNC_INTERVAL_SECS` | `300` | How often to call the API (seconds) — ⚠️ **do not set below 300**, the Anthropic OAuth endpoint will return 429 errors |
 | `ALERT_THRESHOLD` | `75` | % where color switches green → orange |
 | `SHOW_TIME_MARKER` | `true` | White line on session bar showing elapsed time |
 | `ACCENT_COLOR` | `0x07E0` | Base color in RGB565 (green) |
