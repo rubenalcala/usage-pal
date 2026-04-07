@@ -1,6 +1,6 @@
 # Claude Usage Monitor
 
-A physical Claude Pro usage monitor built on an ESP32-C3 Super Mini with a 1.69" ST7789 display. Shows your session (5h) and weekly usage as progress bars with countdown timers, polling the Anthropic OAuth API directly.
+A physical Claude usage monitor built on an ESP32-C3 Super Mini with a 1.69" ST7789 display. Shows your session (5h) and weekly usage as progress bars with countdown timers, polling the Anthropic OAuth API directly.
 
 ## What it shows
 
