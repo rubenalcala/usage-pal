@@ -9,42 +9,75 @@ A physical Claude Pro usage monitor built on an ESP32-C3 Super Mini with a 1.69"
 - Color coding: green → orange (≥75%) → red (100%, bar replaced by large countdown with seconds)
 - White marker line on the session bar showing how much of the 5h window has elapsed
 
-## Hardware
+**Cost: ~$6–8 · Build time: ~1 hour · Skill level: Beginner**
 
-### Parts
 
-- ESP32-C3 Super Mini (AI-Thinker)
-- 1.69" ST7789 TFT display, 240×280, SPI
+---
 
-### Wiring
+> ⚠️ This is an independent fan project. It is not affiliated with, sponsored by, or endorsed by Anthropic. "Claude" are trademarks of Anthropic.
 
-| Display pin | ESP32-C3 GPIO |
-|-------------|---------------|
-| SDA (MOSI)  | 10            |
-| SCL (SCK)   | 8             |
-| RES         | 2             |
-| DC          | 1             |
-| CS          | 4             |
-| BL          | 3             |
-| VCC         | 3V3           |
-| GND         | GND           |
+---
+
+## Wiring
+
+> ⚠️ Connect VCC to **3.3V only** — never 5V. Use GPIO 8 and 10 for SPI (hardware SPI, fast). Do not use GPIO 6/7 for SPI.
+
+| Display pin | ESP32-C3 GPIO  | Wire color (suggested) |
+| ----------- | -------------- | ---------------------- |
+| VCC         | 3V3            | Red                    |
+| GND         | GND            | Black                  |
+| SDA         | GPIO 10 (MOSI) | Orange                 |
+| SCL         | GPIO 8 (SCK)   | Green                  |
+| RES         | GPIO 2         | Purple                 |
+| DC          | GPIO 1         | Blue                   |
+| CS          | GPIO 4         | White                  |
+| BL          | GPIO 3         | Yellow                 |
+
+---
 
 ## Software setup
 
-### 1. Arduino IDE
+### Step 1 — Install Arduino IDE
 
-Install board support:
-1. Open **Preferences** → add to Additional Boards Manager URLs:
+Download [Arduino IDE 2.x](https://www.arduino.cc/en/software) and install it.
+
+### Step 2 — Add ESP32 board support
+
+1. Open Arduino IDE → **File → Preferences**
+2. In "Additional boards manager URLs" paste:
    ```
    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
    ```
-2. **Boards Manager** → search `esp32` → install **esp32 by Espressif**
-3. Select board: **Tools → Board → ESP32C3 Dev Module**
-4. Select **Tools → Partition Scheme → Default**
+3. Go to **Tools → Board → Boards Manager**, search `esp32`, install **"esp32 by Espressif Systems"**
 
-Install libraries via **Sketch → Include Library → Manage Libraries**:
+### Step 3 — Install libraries
+
+Go to **Tools → Library Manager** and install both:
+
 - `Adafruit GFX Library`
 - `Adafruit ST7735 and ST7789 Library`
+
+### Step 4 — Configure board settings
+
+Go to **Tools** and set:
+
+| Setting         | Value                   |
+| --------------- | ----------------------- |
+| Board           | ESP32C3 Dev Module      |
+| USB CDC On Boot | **Enabled** ← important |
+| CPU Frequency   | 160 MHz                 |
+| Upload Speed    | 921600                  |
+
+### Step 5 — Upload the sketch
+
+1. Clone or download this repo
+2. Open `app/app.ino` in Arduino IDE
+3. Connect the ESP32 via USB-C
+4. Select the correct port under **Tools → Port**
+5. Click **Upload** (→ arrow button)
+6. Wait for "Hard resetting via RTS pin..." — this means success
+
+---
 
 ### 2. Configure WiFi
 
