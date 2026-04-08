@@ -92,9 +92,17 @@ unsigned long lastCountdownMs = 0;
 bool ntpSynced = false;
 bool sessionResetting = false;
 bool weeklyResetting  = false;
-int  retryCount       = 0;
+bool authError            = false;
+bool apiError             = false;
+unsigned long apiErrorRetryAt = 0;  // millis() when next sync fires
+int  retryCount           = 0;
 static const unsigned long RETRY_DELAYS[] = {30, 60, 120};  // seconds before falling back to SYNC_INTERVAL_SECS
 char activeToken[220];  // runtime token — loaded from NVS or falls back to OAUTH_TOKEN
+
+// ── Forward declarations ──────────────────────────────────────
+void showSetupScreen(bool isAuthError = false);
+void showApiErrorScreen(int code, long retryInSecs);
+void updateApiErrorCountdown();
 
 // ── Time utilities ────────────────────────────────────────────
 time_t parseISO8601(const char* s) {
@@ -410,14 +418,17 @@ void handleTokenUpdate() {
     tok.trim();
     if (tok.length() > 10 && tok.startsWith("sk-ant-")) {
       bool firstToken = (activeToken[0] == '\0');
+      bool wasAuthError = authError;
       tok.toCharArray(activeToken, sizeof(activeToken));
       prefs.begin("usagepal", false);
       prefs.putString("token", tok);
       prefs.end();
+      authError = false;
+      retryCount = 0;
       server.sendHeader("Location", "/");
       server.send(302);
-      // If this was the first token, boot into normal operation
-      if (firstToken) {
+      // If this was the first token or recovering from auth error, sync immediately
+      if (firstToken || wasAuthError) {
         syncWithAnthropic();
         lastSyncMs = millis();
       } else {
@@ -502,44 +513,58 @@ void syncWithAnthropic() {
     sessionResetting = false;
     weeklyResetting  = false;
     retryCount = 0;
+    apiError   = false;
     redrawAll();
     showIP();
+  } else if (code == 401) {
+    Serial.println("401 Unauthorized — token expired or invalid, showing setup screen");
+    authError = true;
+    activeToken[0] = '\0';  // stop further sync attempts until new token is saved
+    showSetupScreen(true);
   } else {
-    Serial.printf("error: %s\n", resp.substring(0, 200).c_str());
-    char msg[32];
-    snprintf(msg, sizeof(msg), "error %d", code);
-    showStatus(msg, 0xF800);
-    // Schedule retry with backoff
+    Serial.printf("error %d: %s\n", code, resp.substring(0, 200).c_str());
     int idx = retryCount < 3 ? retryCount : 2;
-    lastSyncMs = millis() - (unsigned long)SYNC_INTERVAL_SECS * 1000UL
-                 + RETRY_DELAYS[idx] * 1000UL;
+    long retryInSecs = RETRY_DELAYS[idx];
+    apiErrorRetryAt = millis() + (unsigned long)retryInSecs * 1000UL;
     retryCount++;
+    apiError = true;
+    showApiErrorScreen(code, retryInSecs);
   }
 
   http.end();
 }
 
-// ── Setup screen (no token configured) ───────────────────────
-void showSetupScreen() {
+// ── Setup screen (no token / auth error) ─────────────────────
+void showSetupScreen(bool isAuthError) {
   tft.fillScreen(C_BG);
   String ip = WiFi.localIP().toString();
 
   // Title
   tft.setTextSize(2);
-  tft.setTextColor(C_GREEN);
+  tft.setTextColor(isAuthError ? 0xF800 : C_GREEN);
   tft.setCursor(14, 18);
   tft.print("usagepal");
 
   // Divider
   tft.drawFastHLine(14, 44, DISP_W - 28, 0x2104);
 
-  // Message
-  tft.setTextSize(1);
-  tft.setTextColor(C_WHITE);
-  tft.setCursor(14, 58);
-  tft.print("No token configured.");
-  tft.setCursor(14, 72);
-  tft.print("Open this URL to set it up:");
+  if (isAuthError) {
+    // Error badge
+    tft.setTextSize(1);
+    tft.setTextColor(0xF800);
+    tft.setCursor(14, 54);
+    tft.print("Auth error (401) — token expired");
+    tft.setCursor(14, 66);
+    tft.print("or invalid. Please update it:");
+  } else {
+    // First-time setup
+    tft.setTextSize(1);
+    tft.setTextColor(C_WHITE);
+    tft.setCursor(14, 58);
+    tft.print("No token configured.");
+    tft.setCursor(14, 72);
+    tft.print("Open this URL to set it up:");
+  }
 
   // IP — large, centered, green
   tft.setTextSize(2);
@@ -547,19 +572,88 @@ void showSetupScreen() {
   String url = "http://" + ip;
   int16_t tx, ty; uint16_t tw, th;
   tft.getTextBounds(url.c_str(), 0, 0, &tx, &ty, &tw, &th);
-  tft.setCursor((DISP_W - tw) / 2, 100);
+  tft.setCursor((DISP_W - tw) / 2, 90);
   tft.print(url);
 
   // Divider
-  tft.drawFastHLine(14, 132, DISP_W - 28, 0x2104);
+  tft.drawFastHLine(14, 122, DISP_W - 28, 0x2104);
 
   // Hint
   tft.setTextSize(1);
   tft.setTextColor(C_DIMGRAY);
-  tft.setCursor(14, 144);
-  tft.print("Token is saved on device.");
-  tft.setCursor(14, 156);
-  tft.print("You only need to do this once.");
+  if (isAuthError) {
+    tft.setCursor(14, 134);
+    tft.print("Get a fresh token from your");
+    tft.setCursor(14, 146);
+    tft.print("terminal and paste it on the");
+    tft.setCursor(14, 158);
+    tft.print("web page above.");
+  } else {
+    tft.setCursor(14, 134);
+    tft.print("Token is saved on device.");
+    tft.setCursor(14, 146);
+    tft.print("You only need to do this once.");
+  }
+}
+
+// ── API error screen (429, 5xx, etc.) ────────────────────────
+#define API_ERR_COUNTDOWN_Y  176   // y of the live countdown number (textSize 4 = 32px tall)
+
+void updateApiErrorCountdown() {
+  long secsLeft = 0;
+  if (apiErrorRetryAt > millis())
+    secsLeft = (long)((apiErrorRetryAt - millis()) / 1000UL) + 1;
+
+  char buf[16];
+  int m = secsLeft / 60, s = secsLeft % 60;
+  if (m > 0) snprintf(buf, sizeof(buf), "%dm %02ds", m, s);
+  else        snprintf(buf, sizeof(buf), "%ds", s);
+
+  // Clear countdown area and redraw centered
+  tft.fillRect(0, API_ERR_COUNTDOWN_Y - 2, DISP_W, 36, C_BG);
+  tft.setTextSize(4);
+  tft.setTextColor(0xFC00);
+  int16_t tx, ty; uint16_t tw, th;
+  tft.getTextBounds(buf, 0, 0, &tx, &ty, &tw, &th);
+  tft.setCursor((DISP_W - tw) / 2, API_ERR_COUNTDOWN_Y);
+  tft.print(buf);
+}
+
+void showApiErrorScreen(int code, long retryInSecs) {
+  tft.fillScreen(C_BG);
+
+  // Error code + description (textSize 2 = 16px tall, ~20px spacing)
+  tft.setTextSize(2);
+  tft.setTextColor(0xFC00);
+  tft.setCursor(14, 46);
+  if (code == 429) {
+    tft.print("Rate limited (429).");
+    tft.setCursor(14, 70);
+    tft.setTextColor(C_WHITE);
+    tft.print("Too many requests.");
+    tft.setCursor(14, 94);
+    tft.print("Retrying auto...");
+  } else {
+    char msg[24];
+    snprintf(msg, sizeof(msg), "API error (%d).", code);
+    tft.print(msg);
+    tft.setCursor(14, 70);
+    tft.setTextColor(C_WHITE);
+    tft.print("Retrying auto...");
+  }
+
+  // Divider + label
+  tft.drawFastHLine(14, 124, DISP_W - 28, 0x2104);
+  tft.setTextSize(2);
+  tft.setTextColor(C_WHITE);
+  int16_t tx, ty; uint16_t tw, th;
+  const char* label = "Next attempt in";
+  tft.getTextBounds(label, 0, 0, &tx, &ty, &tw, &th);
+  tft.setCursor((DISP_W - tw) / 2, 148);
+  tft.print(label);
+
+  // Live countdown (initial draw)
+  updateApiErrorCountdown();
 }
 
 // ── Setup ─────────────────────────────────────────────────────
@@ -623,12 +717,20 @@ void setup() {
 // ── Loop ──────────────────────────────────────────────────────
 void loop() {
   server.handleClient();
-  if (activeToken[0] != '\0' && millis() - lastSyncMs >= (unsigned long)SYNC_INTERVAL_SECS * 1000UL) {
-    lastSyncMs = millis();
-    syncWithAnthropic();
+  if (!authError && activeToken[0] != '\0') {
+    bool shouldSync = apiError
+      ? (millis() >= apiErrorRetryAt)
+      : (millis() - lastSyncMs >= (unsigned long)SYNC_INTERVAL_SECS * 1000UL);
+    if (shouldSync) {
+      lastSyncMs = millis();
+      syncWithAnthropic();
+    }
   }
-  if (activeToken[0] != '\0' && millis() - lastCountdownMs >= 1000) {
+  if (!authError && millis() - lastCountdownMs >= 1000) {
     lastCountdownMs = millis();
-    updateResetTexts();
+    if (apiError)
+      updateApiErrorCountdown();
+    else if (activeToken[0] != '\0')
+      updateResetTexts();
   }
 }
